@@ -125,13 +125,13 @@ app.post("/pack/generate", authMiddleware, async (req, res) => {
         }
     })
 
-    const model= await prismaClient.model.findFirst({
+    const model = await prismaClient.model.findFirst({
         where: {
             id: parsedBody.data.modelId
         }
     })
 
-    if(!model) {
+    if (!model) {
         return res.status(411).json({
             message: "model not found"
         })
@@ -170,7 +170,10 @@ app.get("/image/bulk", authMiddleware, async (req, res) => {
     const imagesData = await prismaClient.outputImages.findMany({
         where: {
             id: { in: ids },
-            userId: req.userId!
+            userId: req.userId!,
+            status: {
+                not: "Failed"
+            }
         },
         skip: parseInt(offset),
         take: parseInt(limit)
@@ -223,6 +226,20 @@ app.post("/fal-ai/webhook/image", async (req, res) => {
     console.log(req.body)
     //update the status of the image in db
     const request_id = req.body.request_id;
+
+    if (req.body.status === "ERROR") {
+        res.status(411).json({});
+        prismaClient.outputImages.updateMany({
+            where: {
+                falAiRequest: request_id
+            },
+            data: {
+                status: "Failed",
+                imageUrl: req.body.payload.images[0].url
+            }
+        })
+        return;
+    }
 
     await prismaClient.outputImages.updateMany({
         where: {
