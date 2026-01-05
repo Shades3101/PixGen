@@ -182,7 +182,8 @@ app.get("/models", authMiddleware, async (req, res) => {
 })
 
 app.post("/fal-ai/webhook/train", async (req, res) => {
-
+    console.log("/fal-ai/webhook/train")
+    console.log(req.body)
     //update the status of the image in db
     const request_id = req.body.request_id;
 
@@ -206,7 +207,8 @@ app.post("/fal-ai/webhook/train", async (req, res) => {
 })
 
 app.post("/fal-ai/webhook/image", async (req, res) => {
-
+    console.log("/fal-ai/webhook/image")
+    console.log(req.body)
     //update the status of the image in db
     const request_id = req.body.request_id;
 
