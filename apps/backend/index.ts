@@ -125,7 +125,19 @@ app.post("/pack/generate", authMiddleware, async (req, res) => {
         }
     })
 
-    let requestIds: { request_id: string }[] = await Promise.all(prompts.map((prompt: { prompt: string }) => falAiModel.generateImage(prompt.prompt, parsedBody.data.modelId)))
+    const model= await prismaClient.model.findFirst({
+        where: {
+            id: parsedBody.data.modelId
+        }
+    })
+
+    if(!model) {
+        return res.status(411).json({
+            message: "model not found"
+        })
+    }
+
+    let requestIds: { request_id: string }[] = await Promise.all(prompts.map((prompt: { prompt: string }) => falAiModel.generateImage(prompt.prompt, model.tensorPath!)))
 
     const images = await prismaClient.outputImages.createManyAndReturn({
         data: prompts.map((prompt: { prompt: string }, index: number) => ({
