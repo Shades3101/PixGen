@@ -218,7 +218,7 @@ app.post("/fal-ai/webhook/image", async (req, res) => {
         },
         data: {
             status: "Generated",
-            imageUrl: req.body.response_url
+            imageUrl: req.body.payload.images[0].url
         }
     })
 
