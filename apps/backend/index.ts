@@ -1,6 +1,6 @@
 import express from "express";
-import { TrainModel, GenerateImage, GenerateImageFromPack } from "../../packages/common/types";
-import { prismaClient } from "../../packages/db";
+import { TrainModel, GenerateImage, GenerateImageFromPack } from "common/types";
+import { prismaClient, EthnicityEnum } from "db";
 
 import { S3Client } from "bun";
 import { FalAIModel } from "./models/FalAIModel";
@@ -57,7 +57,7 @@ app.post("/ai/training", authMiddleware, async (req, res) => {
             name: parsedBody.data.name,
             type: parsedBody.data.type,
             age: parsedBody.data.age,
-            ethnicity: parsedBody.data.ethnicity,
+            ethnicity: parsedBody.data.ethnicity as EthnicityEnum,
             eyeColor: parsedBody.data.eyeColor,
             bald: parsedBody.data.bald,
             userId: req.userId!,
@@ -146,7 +146,7 @@ app.post("/pack/generate", authMiddleware, async (req, res) => {
             userId: req.userId!,
             modelId: parsedBody.data.modelId,
             imageUrl: "",
-            falAiRequestId: requestIds[index]?.request_id
+            falAiRequest: requestIds[index]?.request_id
         }))
     })
 
@@ -168,14 +168,19 @@ app.get("/image/bulk", authMiddleware, async (req, res) => {
     const limit = req.query.limit as string ?? "10";
     const offset = req.query.offset as string ?? "0";
 
+    const where: any = {
+        userId: req.userId!,
+        status: {
+            not: "Failed"
+        }
+    };
+
+    if (ids) {
+        where.id = { in: ids };
+    }
+
     const imagesData = await prismaClient.outputImages.findMany({
-        where: {
-            id: { in: ids },
-            userId: req.userId!,
-            status: {
-                not: "Failed"
-            }
-        },
+        where,
         orderBy: {
             createdAt: "desc"
         },
@@ -254,7 +259,7 @@ app.post("/fal-ai/webhook/image", async (req, res) => {
             falAiRequest: request_id
         },
         data: {
-            status: "Generated", 
+            status: "Generated",
             imageUrl: req.body.payload.images[0].url
         }
     })

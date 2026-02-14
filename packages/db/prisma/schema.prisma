@@ -5,7 +5,7 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client"
+  provider = "prisma-client-js"
   output   = "../generated/prisma"
 }
 
@@ -22,7 +22,7 @@ model User {
 }
 
 model Model {
-  id             String           @id @default(uuid())
+  id             String          @id @default(uuid())
   name           String
   type           ModelTypeEnum
   age            Int
@@ -33,38 +33,39 @@ model Model {
   triggerWord    String?
   tensorPath     String?
   thumbnail      String?
-  trainingStatus ModelStatusEnum  @default(Pending)
+  trainingStatus ModelStatusEnum @default(Pending)
   outputImages   OutputImages[]
-  createdAt      DateTime         @default(now())
-  updateAt       DateTime         @updatedAt
-  falAiRequest   String?          @unique
+  createdAt      DateTime        @default(now())
+  updateAt       DateTime        @updatedAt
+  falAiRequest   String?         @unique
   zipUrl         String
-  open           Boolean           @default(false)
+  open           Boolean         @default(false)
+
   @@index([falAiRequest])
 }
 
 model OutputImages {
-  id        String                @id @default(uuid())
-  imageUrl  String                @default("")
-  modelId   String
-  userId    String
-  prompt    String
-  falAiRequest   String?          @unique
-  status    OutputImageStatusEnum @default(Pending)
-  model     Model                 @relation(fields: [modelId], references: [id])
-  createdAt DateTime              @default(now())
-  updateAt  DateTime              @updatedAt
+  id           String                @id @default(uuid())
+  imageUrl     String                @default("")
+  modelId      String
+  userId       String
+  prompt       String
+  falAiRequest String?               @unique
+  status       OutputImageStatusEnum @default(Pending)
+  model        Model                 @relation(fields: [modelId], references: [id])
+  createdAt    DateTime              @default(now())
+  updateAt     DateTime              @updatedAt
 
   @@index([falAiRequest])
 }
 
 model Packs {
-  id      String        @id @default(uuid())
-  name    String
-  description String    @default("")
-  imageUrl1  String      @default("")
-  imageUrl2  String     @default("")
-  prompts PackPrompts[]
+  id          String        @id @default(uuid())
+  name        String
+  description String        @default("")
+  imageUrl1   String        @default("")
+  imageUrl2   String        @default("")
+  prompts     PackPrompts[]
 }
 
 model PackPrompts {

@@ -23,7 +23,9 @@ export default function GenerateImage() {
             <div className="flex justify-center ">
                 <Textarea onChange={(e) => {
                     setPrompt(e.target.value);
-                }} placeholder="Describe the image that you'd like to see here" className="py-4 px-4 w-2xl border border-blue-200 hover:border-blue-300 focus:border-blue-300 outline-none"></Textarea>
+                }} 
+                placeholder="Describe the image that you'd like to see here" 
+                className="py-4 px-4 w-2xl border border-blue-200 hover:border-blue-300 focus:border-blue-300 outline-none"></Textarea>
 
             </div>
             <div className="flex justify-center pt-4">
