@@ -10,7 +10,7 @@ import { fal } from "@fal-ai/client";
 
 
 
-const PORT = process.env.PORT;
+const PORT = Number(process.env.PORT ?? 8080);
 
 const falAiModel = new FalAIModel();
 
@@ -272,6 +272,6 @@ app.post("/fal-ai/webhook/image", async (req, res) => {
     })
 })
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running on ${PORT}`);
 })
