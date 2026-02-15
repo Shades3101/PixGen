@@ -25,6 +25,9 @@
             "dependsOn": [
                 "^check-types"
             ]
+        },
+        "generate": {
+            "cache": false
         }
     }
 }
