@@ -10,7 +10,7 @@ import { fal } from "@fal-ai/client";
 
 
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT;
 
 const falAiModel = new FalAIModel();
 
