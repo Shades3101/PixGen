@@ -5,21 +5,22 @@
   "private": true,
   "scripts": {
     "start": "bun run index.ts",
-    "dev": "bun --watch index.ts"
+    "dev": "bun --watch index.ts",
+    "build": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@fal-ai/client": "^1.7.2",
+    "@fal-ai/client": "^1.9.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "common": "*",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "db": "*",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3"

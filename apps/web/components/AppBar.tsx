@@ -5,7 +5,7 @@ export function AppBar() {
 
     return <div className='flex justify-between p-2 border-b'>
         <div className='text-xl'>
-            PhotoAI
+            Pic-X
         </div>
         <div>
             <SignedOut>

@@ -8,7 +8,7 @@ import cors from "cors";
 import { authMiddleware } from "./middleware";
 import { fal } from "@fal-ai/client";
 
-const USER_ID = "123"
+
 
 const PORT = process.env.PORT || 8080;
 
