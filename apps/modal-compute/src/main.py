@@ -12,8 +12,10 @@ app = modal.App("pixgen-gpu")
 volume = modal.Volume.from_name("pixgen_models", create_if_missing=True)
 MODEL_DIR = "/models"
 
-# Base model for Flux LoRA training
-BASE_MODEL = "black-forest-labs/FLUX.1-dev"
+# Base model for SDXL LoRA training
+# NOTE: To upgrade to FLUX.1-dev later (better quality, needs A100-40GB):
+#   Change to: BASE_MODEL = "black-forest-labs/FLUX.1-dev"
+BASE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
 DIFFUSERS_REPO = "https://github.com/huggingface/diffusers.git"
 DIFFUSERS_REF = "v0.31.0"  # pinned for reproducibility
 
@@ -25,23 +27,23 @@ gpu_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .uv_pip_install(
-        "accelerate==0.31.0",
+        "accelerate>=1.1.0",
         "datasets~=2.13.0",
         "fastapi[standard]==0.115.4",
         "ftfy~=6.1.0",
-        "huggingface-hub==0.31.0",
+        "huggingface-hub>=0.28.0",
         "numpy<2",
-        "peft==0.15.2",
-        "pydantic==2.9.2",
+        "peft==0.15.2",  # pinned: diffusers 0.31.0 needs >=0.6.0, training script needs use_dora support
+        "pydantic>=2.9.0",
         "sentencepiece>=0.1.91,!=0.1.92",
         "smart_open~=6.4.0",
-        "starlette==0.41.2",
-        "transformers~=4.41.2",
-        "torch~=2.2.0",
-        "torchvision~=0.16",
-        "triton~=2.2.0",
-        "wandb==0.17.6",
-        "diffusers>=0.25.0",
+        "starlette>=0.40.0",
+        "transformers==4.48.0",  # pinned: newer versions break diffusers 0.31.0 (FLAX_WEIGHTS_NAME removed)
+        "torch>=2.4.0",
+        "torchvision>=0.19.0",
+        "triton>=2.3.0",
+        "wandb>=0.18.0",
+        "diffusers==0.31.0",  # pinned to match training script (DIFFUSERS_REF)
         "boto3>=1.34.0",
         "requests>=2.31.0",
         "safetensors>=0.4.0",
@@ -50,13 +52,40 @@ gpu_image = (
         "bitsandbytes>=0.43.0",  # 8-bit Adam optimizer for memory savings
     )
     .env({"HF_HOME": "/cache/huggingface"})
-
     # Clone diffusers repo and install training script requirements
     .run_commands(
         f"git clone --depth 1 --branch {DIFFUSERS_REF} {DIFFUSERS_REPO} /diffusers",
-        "pip install -r /diffusers/examples/dreambooth/requirements_flux.txt || true",
+        # NOTE: Don't install requirements.txt — it pins peft==0.7.0 which
+        # downgrades our peft and breaks use_dora. Only install the extra deps.
+        "pip install tensorboard Jinja2",
     )
 )
+
+def download_models():
+    """
+    Download the SDXL base model and VAE at image build time.
+    Baking these into the Modal image prevents a 5-minute 6.5GB download
+    every time a new container boots up (cold start).
+    """
+    import torch
+    from diffusers import StableDiffusionXLPipeline, AutoencoderKL
+
+    print("Downloading SDXL-fp16 VAE...")
+    AutoencoderKL.from_pretrained(
+        "madebyollin/sdxl-vae-fp16-fix", 
+        torch_dtype=torch.float16
+    )
+
+    print("Downloading SDXL base model (fp16 variant)...")
+    StableDiffusionXLPipeline.from_pretrained(
+        BASE_MODEL,
+        torch_dtype=torch.float16,
+        variant="fp16",
+        use_safetensors=True,
+    )
+
+# Run the download function as the final step in the image build
+gpu_image = gpu_image.run_function(download_models)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -65,27 +94,38 @@ gpu_image = (
 
 @dataclass
 class TrainConfig:
-    """Hyperparameters for Flux LoRA DreamBooth training on faces.
+    """Hyperparameters for SDXL LoRA DreamBooth training on faces.
     
     Budget-optimized for $5 total:
-      - L4 GPU (~$0.80/hr) + 500 steps ≈ $0.08–$0.12 per training run
-      - ~30–50 training runs possible within $5
+      - T4 GPU (~$0.59/hr) + 500 steps ≈ $0.15 per training run
+      - ~33 training runs + 500s of inferences within $5
     """
-    max_train_steps: int = 500           # ~8 min on L4, enough for 10-20 face images
+    max_train_steps: int = 500           # ~15 min on T4, enough for 10-20 face images
     learning_rate: float = 1e-4          # standard for LoRA
-    lora_rank: int = 8                   # smaller rank = faster + less VRAM for L4
-    resolution: int = 512                # 512 to fit in L4's 24GB VRAM
-    train_batch_size: int = 1            # keep at 1 to fit in 24GB L4
+    lora_rank: int = 8                   # good balance of quality vs speed
+    resolution: int = 1024                # 🔥 Native SDXL resolution (enabled by 8-bit Adam)
+    train_batch_size: int = 1            # keep at 1 for T4's 16GB VRAM
     gradient_accumulation_steps: int = 2 # effective batch size of 2
     lr_scheduler: str = "constant"       # constant works well for short LoRA runs
     seed: int = 42
-    mixed_precision: str = "fp16"        # FP16 for L4/T4 (bf16 needs A100+)
+    mixed_precision: str = "no"          # fp32: fp16 has known gradient scaler bugs with peft LoRA
     gradient_checkpointing: bool = True  # save VRAM at slight speed cost
+    use_8bit_adam: bool = True 
+    set_grads_to_none: bool = True
 
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
+
+# Default negative prompt for portrait/headshot LoRA
+DEFAULT_NEGATIVE_PROMPT = (
+    "blurry, low quality, low resolution, deformed, disfigured, "
+    "bad anatomy, wrong proportions, extra limbs, cloned face, ugly, "
+    "oversaturated, cartoon, anime, illustration, painting, drawing, "
+    "watermark, text, signature, cropped, out of frame"
+)
+
 
 def _sign_payload(payload: dict) -> str:
     """Create HMAC-SHA256 signature for webhook payload.
@@ -93,36 +133,41 @@ def _sign_payload(payload: dict) -> str:
     IMPORTANT: The Express backend verifies with:
         crypto.createHmac("sha256", secret).update(JSON.stringify(req.body)).digest("hex")
     
-    JS JSON.stringify produces: {"key": "value"} (space after colon)
-    Python json.dumps default also produces: {"key": "value"} (space after colon)
-    
-    So we use default separators to ensure signatures match.
+    JS JSON.stringify produces compact JSON: {"key":"value"} (NO spaces)
+    Python json.dumps must match exactly with separators=(",", ":")
     """
     import json, hmac, hashlib
     secret = os.environ["MODAL_WEBHOOK_SECRET"]
-    body = json.dumps(payload, separators=(", ", ": "))
+    body = json.dumps(payload, separators=(",", ":"))
     return hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
 
 
 def _send_webhook(webhook_url: str, payload: dict):
-    """Send signed webhook to Express backend."""
-    import requests
+    """Send signed webhook to Express backend (with retry for Render cold starts)."""
+    import requests, time
     signature = _sign_payload(payload)
-
-    try:
-        requests.post(
-            webhook_url,
-            json=payload,
-            headers={"X-Modal-Signature": signature},
-            timeout=15,
-        )
-    except Exception as e:
-        print(f"[WEBHOOK ERROR] Failed to send webhook: {e}")
+    
+    # Retry up to 3 times — Render free tier can take 30+ seconds to wake up
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                webhook_url,
+                json=payload,
+                headers={"X-Modal-Signature": signature},
+                timeout=60,  # 60s to handle Render cold starts
+            )
+            print(f"[WEBHOOK] Sent successfully (status {resp.status_code})")
+            return
+        except Exception as e:
+            print(f"[WEBHOOK] Attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(5)  # wait 5s before retry
+    
+    print(f"[WEBHOOK ERROR] All 3 attempts failed for {webhook_url}")
 
 
 def _upload_to_s3(image_bytes: bytes, s3_key: str, content_type: str = "image/png") -> str:
     """Upload bytes to S3/R2 and return the public URL."""
-    
     import boto3
     s3 = boto3.client(
         "s3",
@@ -137,7 +182,9 @@ def _upload_to_s3(image_bytes: bytes, s3_key: str, content_type: str = "image/pn
         Body=image_bytes,
         ContentType=content_type,
     )
-    return f"{os.environ['S3_ENDPOINT']}/{bucket}/{s3_key}"
+    # Use public URL (S3_ENDPOINT is the private API endpoint, not browser-accessible)
+    public_url = os.environ["S3_PUBLIC_URL"]
+    return f"{public_url}/{s3_key}"
 
 
 def _pil_to_bytes(image) -> bytes:
@@ -182,13 +229,110 @@ def _prepare_training_images(zip_url: str, output_dir: str) -> str:
     return str(img_dir)
 
 
+def _preprocess_training_images(input_dir: str, output_dir: str, target_size: int = 1024) -> str:
+    """Auto-crop faces, resize, and filter training images.
+    
+    Center-crops to square, resizes to target resolution, and saves as PNG
+    for consistent training quality. Skips corrupt/unreadable images.
+    """
+    from PIL import Image
+    from pathlib import Path
+
+    in_path = Path(input_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    image_files = (
+        list(in_path.glob("*.jpg")) + list(in_path.glob("*.jpeg")) +
+        list(in_path.glob("*.png")) + list(in_path.glob("*.webp"))
+    )
+
+    processed = 0
+    for img_file in image_files:
+        try:
+            img = Image.open(img_file).convert("RGB")
+
+            # Center crop to square
+            w, h = img.size
+            min_dim = min(w, h)
+            left = (w - min_dim) // 2
+            top = (h - min_dim) // 2
+            img = img.crop((left, top, left + min_dim, top + min_dim))
+
+            # Resize to target resolution
+            img = img.resize((target_size, target_size), Image.LANCZOS)
+
+            # Save as PNG for consistent quality
+            img.save(out_path / f"{img_file.stem}.png", "PNG")
+            processed += 1
+
+        except Exception as e:
+            print(f"[PREPROCESS] Skipping {img_file.name}: {e}")
+
+    print(f"[PREPROCESS] Processed {processed}/{len(image_files)} images")
+    return str(out_path)
+
+
 # ─────────────────────────────────────────────────────────────────
 # TRAINING ENDPOINT
 # ─────────────────────────────────────────────────────────────────
 
+# Map frontend ethnicity values to natural language descriptions
+ETHNICITY_MAP = {
+    "White": "white",
+    "Black": "black",
+    "AsianAmerican": "Asian American",
+    "EastAsian": "East Asian",
+    "SouthEastAsian": "Southeast Asian",
+    "SouthAsian": "South Asian",
+    "MiddleEastern": "Middle Eastern",
+    "Pacific": "Pacific Islander",
+    "Hispanic": "Hispanic",
+}
+
+
+def _build_training_prompts(trigger_word: str, model_details: dict | None) -> tuple[str, str]:
+    """Build instance_prompt and class_prompt from model details.
+
+    Returns (instance_prompt, class_prompt).
+    - instance_prompt: describes THIS specific person (with trigger word)
+    - class_prompt: describes the general category (for prior preservation)
+    """
+    if not model_details:
+        return f"a photo of {trigger_word} person", "a photo of a person"
+
+    # Build a natural description: "a 25 year old South Asian man"
+    parts = []
+    if model_details.get("age"):
+        parts.append(f"{model_details['age']} year old")
+    if model_details.get("ethnicity"):
+        ethnicity = ETHNICITY_MAP.get(model_details["ethnicity"], model_details["ethnicity"])
+        parts.append(ethnicity)
+
+    # Type: Man/Woman/Others → man/woman/person
+    type_val = model_details.get("type", "person")
+    type_word = {"Man": "man", "Woman": "woman"}.get(type_val, "person")
+    parts.append(type_word)
+
+    description = " ".join(parts)  # e.g. "25 year old South Asian man"
+
+    # Add extra traits
+    traits = []
+    if model_details.get("eyeColor"):
+        traits.append(f"{model_details['eyeColor'].lower()} eyes")
+    if model_details.get("bald"):
+        traits.append("bald")
+
+    trait_str = f", {', '.join(traits)}" if traits else ""
+
+    instance_prompt = f"a photo of {trigger_word} {description}{trait_str}"
+    class_prompt = f"a photo of a {description}"
+
+    return instance_prompt, class_prompt
+
 @app.function(
     image=gpu_image,
-    gpu="L4",                           # L4 ~$0.80/hr (budget-friendly, 24GB VRAM)
+    gpu="T4",                           # T4 ~$0.59/hr (SDXL fits in 16GB VRAM)
     volumes={MODEL_DIR: volume},
     timeout=1200,                      # 20 min safety cap (500 steps ≈ 8 min)
     secrets=[modal.Secret.from_name("PixGen-Secrets")],
@@ -196,7 +340,7 @@ def _prepare_training_images(zip_url: str, output_dir: str) -> str:
 @modal.fastapi_endpoint(method="POST")
 def train(data: dict):
     """
-    Fine-tune FLUX.1-dev with LoRA on user-uploaded face images.
+    Fine-tune SDXL with LoRA on user-uploaded face images.
     
     Expected payload:
     {
@@ -212,6 +356,12 @@ def train(data: dict):
     trigger_word = data["triggerWord"]
     model_id = data["modelId"]
     webhook_url = data["webhookUrl"]
+    model_details = data.get("modelDetails")  # physical traits from frontend
+
+    # Build descriptive prompts from model details
+    instance_prompt, class_prompt = _build_training_prompts(trigger_word, model_details)
+    print(f"[TRAIN] Instance prompt: '{instance_prompt}'")
+    print(f"[TRAIN] Class prompt: '{class_prompt}'")
 
     config = TrainConfig()
     output_dir = f"{MODEL_DIR}/{model_id}"
@@ -224,11 +374,17 @@ def train(data: dict):
         # ── Step 1: Download & extract training images ──────────
         train_data_dir = _prepare_training_images(zip_url, "/tmp/training_images")
 
+        # ── Step 1b: Pre-process images (Optimization 9) ────────
+        #    Center-crop, resize to 1024x1024, filter bad images
+        train_data_dir = _preprocess_training_images(
+            train_data_dir, "/tmp/processed_images", config.resolution
+        )
+
         # ── Step 2: Run LoRA fine-tuning via accelerate ─────────
-        #    Uses the official HuggingFace DreamBooth LoRA script
-        #    Reference: https://huggingface.co/docs/diffusers/training/dreambooth#flux
+        #    Uses the official HuggingFace DreamBooth LoRA SDXL script
+        #    Reference: https://huggingface.co/docs/diffusers/training/dreambooth
         
-        training_script = "/diffusers/examples/dreambooth/train_dreambooth_lora_flux.py"
+        training_script = "/diffusers/examples/dreambooth/train_dreambooth_lora_sdxl.py"
         
         # Build the accelerate launch command
         cmd = [
@@ -236,9 +392,10 @@ def train(data: dict):
             "--mixed_precision", config.mixed_precision,
             training_script,
             "--pretrained_model_name_or_path", BASE_MODEL,
+            "--pretrained_vae_model_name_or_path", "madebyollin/sdxl-vae-fp16-fix",  # prevents NaN in fp16
             "--instance_data_dir",             train_data_dir,
             "--output_dir",                    output_dir,
-            "--instance_prompt",               f"a photo of {trigger_word} person",
+            "--instance_prompt",               instance_prompt,
             "--resolution",                    str(config.resolution),
             "--train_batch_size",              str(config.train_batch_size),
             "--gradient_accumulation_steps",    str(config.gradient_accumulation_steps),
@@ -247,11 +404,21 @@ def train(data: dict):
             "--max_train_steps",               str(config.max_train_steps),
             "--seed",                          str(config.seed),
             "--rank",                          str(config.lora_rank),
+            # Prior Preservation Loss (Optimization 8) — prevents overfitting
+            "--with_prior_preservation_loss",
+            "--prior_loss_weight", "1.0",
+            "--class_data_dir", "/tmp/class_images",
+            "--class_prompt", class_prompt,
+            "--num_class_images", "50",  # balance of quality vs cost
         ]
 
         # Add memory optimization flags
         if config.gradient_checkpointing:
             cmd.append("--gradient_checkpointing")
+        if config.use_8bit_adam:
+            cmd.append("--use_8bit_adam")         # 70% less optimizer VRAM
+        if config.set_grads_to_none:
+            cmd.append("--set_grads_to_none")     # free a bit more VRAM
 
         print(f"[TRAIN] Starting LoRA fine-tuning for model {model_id}")
         print(f"[TRAIN] Trigger word: '{trigger_word}'")
@@ -329,151 +496,117 @@ def train(data: dict):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Shared inference function (used by /generate endpoint)
+# INFERENCE ENDPOINT — Class-based VRAM caching (Optimization 1)
+# Model stays loaded in VRAM between requests via @modal.enter()
 # ─────────────────────────────────────────────────────────────────
 
-def _run_inference(
-    lora_weights_path: str,
-    prompt: str,
-    num_inference_steps: int = 20,
-    guidance_scale: float = 3.5,
-    width: int = 512,
-    height: int = 512,
-):
-    """
-    Load FLUX.1-dev + LoRA weights and generate an image.
-    
-    Returns a PIL Image.
-    """
-    import torch
-    from diffusers.pipelines.flux.pipeline_flux import FluxPipeline
-
-    print(f"[INFERENCE] Loading base model: {BASE_MODEL}")
-
-    # Load base Flux pipeline in FP16 for L4/T4
-    pipe = FluxPipeline.from_pretrained(
-        BASE_MODEL,
-        torch_dtype=torch.float16,
-    )
-    pipe.to("cuda")
-
-    # Load the trained LoRA weights
-    print(f"[INFERENCE] Loading LoRA weights from: {lora_weights_path}")
-    pipe.load_lora_weights(
-        lora_weights_path,
-        adapter_name="user_lora",
-    )
-    pipe.set_adapters(["user_lora"], adapter_weights=[1.0])
-
-    # Enable memory-efficient attention if available
-    try:
-        pipe.enable_xformers_memory_efficient_attention()
-    except Exception:
-        pass  # xformers not installed, that's fine
-
-    # Generate image
-    print(f"[INFERENCE] Generating image: prompt='{prompt[:80]}...'" if len(prompt) > 80 else f"[INFERENCE] Generating image: prompt='{prompt}'")
-
-    result = pipe(
-        prompt=prompt,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        width=width,
-        height=height,
-        generator=torch.Generator("cuda").manual_seed(42),
-    )
-    image = result.images[0]  # type: ignore[union-attr]
-
-    # Cleanup to free VRAM
-    del pipe
-    torch.cuda.empty_cache()
-
-    print(f"[INFERENCE] Image generated: {image.size}")
-    return image
-
-
-# ─────────────────────────────────────────────────────────────────
-# INFERENCE ENDPOINT
-# ─────────────────────────────────────────────────────────────────
-
-@app.function(
+@app.cls(
     image=gpu_image,
-    gpu="T4",                          # T4 ~$0.59/hr (cheapest GPU, 16GB VRAM)
+    gpu="T4",
     volumes={MODEL_DIR: volume},
-    timeout=120,              # 2 min max for inference
-    max_containers=10,        # max 10 concurrent image generations
+    timeout=120,
+    scaledown_window=300,  # Keep warm for 5 min between requests
+    max_containers=10,
     secrets=[modal.Secret.from_name("PixGen-Secrets")],
 )
-@modal.fastapi_endpoint(method="POST")
-def generate(data: dict):
-    """
-    Generate an image using a fine-tuned LoRA model.
-    
-    Expected payload:
-    {
-        "prompt":      "A headshot of sks person in a formal suit",
-        "modelId":     "uuid",
-        "imageId":     "uuid",
-        "webhookUrl":  "https://api.../modal/webhook/image"
-    }
-    """
-    model_id = data["modelId"]
-    image_id = data["imageId"]
-    prompt = data["prompt"]
-    webhook_url = data["webhookUrl"]
+class SDXLInference:
 
-    status = "Generated"
-    image_url = ""
-    error_message = ""
+    @modal.enter()
+    def setup(self):
 
-    try:
-        # ── Step 1: Locate LoRA weights on the volume ───────────
-        volume.reload()  # ensure latest weights are available
+        """Runs ONCE when container boots. Model stays in VRAM."""
 
-        lora_dir = Path(f"{MODEL_DIR}/{model_id}")
-        lora_path = lora_dir / "pytorch_lora_weights.safetensors"
-        
-        if not lora_path.exists():
-            # Fallback: search for any safetensors file
-            alt_files = list(lora_dir.glob("*.safetensors"))
-            if alt_files:
-                lora_path = alt_files[0]
-            else:
-                raise FileNotFoundError(
-                    f"No LoRA weights found for model {model_id}. "
-                    f"Expected at {lora_path}"
-                )
+        import torch
+        from diffusers import StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler
 
-        print(f"[GENERATE] Using LoRA weights: {lora_path}")
-
-        # ── Step 2: Run inference ───────────────────────────────
-        generated_image = _run_inference(
-            lora_weights_path=str(lora_path),
-            prompt=prompt,
+        print("[SETUP] Loading SDXL base model into VRAM...")
+        self.pipe = StableDiffusionXLPipeline.from_pretrained(
+            BASE_MODEL,
+            torch_dtype=torch.float16,
+            variant="fp16",
+            use_safetensors=True,
         )
 
-        # ── Step 3: Upload to S3/R2 ────────────────────────────
-        s3_key = f"outputs/{model_id}/{image_id}.png"
-        image_url = _upload_to_s3(
-            _pil_to_bytes(generated_image),
-            s3_key,
+        # Optimization 3: Fast scheduler
+        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
+            self.pipe.scheduler.config
         )
-        print(f"[GENERATE] Image uploaded: {image_url}")
 
-    except Exception as e:
-        status = "Failed"
-        error_message = str(e)
-        print(f"[GENERATE] ERROR: {error_message}")
-        import traceback
-        traceback.print_exc()
+        # Optimization 6: Memory efficient attention
+        self.pipe.enable_vae_tiling()
 
-    # ── Step 4: Send webhook back to Express backend ────────────
-    payload = {
-        "imageId": image_id,
-        "status": status,
-        "imageUrl": image_url,
-        "error": error_message,
-    }
-    _send_webhook(webhook_url, payload)
+        self.pipe.to("cuda")
 
-    return {"status": status, "imageId": image_id}
+        # Optimization 5: torch.compile (one-time ~30s compile, then 20-30% faster)
+        self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead")
+        print("[SETUP] UNet compiled with torch.compile() — first inference will be slower")
+
+    @modal.fastapi_endpoint(method="POST", label="pixgen-gpu-generate")
+    def generate(self, data: dict):
+        """Instant generation — model already in self.pipe."""
+        import torch
+
+        model_id = data["modelId"]
+        image_id = data["imageId"]
+        prompt = data["prompt"]
+        webhook_url = data["webhookUrl"]
+
+        # Optional params with sensible defaults
+        lora_weight = data.get("loraWeight", 0.85)       # Optimization 7
+        num_steps = data.get("numSteps", 20)              # Optimization 3
+        guidance_scale = data.get("guidanceScale", 6.0)
+        width = data.get("width", 768)
+        height = data.get("height", 768)
+
+        # Default negative prompt (Optimization 4)
+        negative_prompt = data.get("negativePrompt",
+            "blurry, low quality, deformed, disfigured, cartoon, anime, "
+            "illustration, painting, drawing, bad anatomy, wrong proportions, "
+            "extra limbs, cloned face, ugly, oversaturated"
+        )
+
+        status = "Generated"
+        image_url = ""
+        error_message = ""
+
+        try:
+            volume.reload()
+            lora_path = f"{MODEL_DIR}/{model_id}/pytorch_lora_weights.safetensors"
+
+            # Load user's LoRA → generate → unload (keeps base model clean)
+            self.pipe.load_lora_weights(lora_path, adapter_name="user_lora")
+            self.pipe.set_adapters(["user_lora"], adapter_weights=[lora_weight])
+
+            image = self.pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=num_steps,
+                guidance_scale=guidance_scale,
+                width=width,
+                height=height,
+                generator=torch.Generator("cuda").manual_seed(42),
+            ).images[0]
+
+            # CRITICAL: unload LoRA so next user gets a clean base model
+            self.pipe.unload_lora_weights()
+
+            s3_key = f"outputs/{model_id}/{image_id}.png"
+            image_url = _upload_to_s3(_pil_to_bytes(image), s3_key)
+
+        except Exception as e:
+            status = "Failed"
+            error_message = str(e)
+            # Safety: always try to unload LoRA even on error
+            try:
+                self.pipe.unload_lora_weights()
+            except:
+                pass
+
+        payload = {
+            "imageId": image_id,
+            "status": status,
+            "imageUrl": image_url,
+            "error": error_message,
+        }
+        _send_webhook(webhook_url, payload)
+        return {"status": status, "imageId": image_id}

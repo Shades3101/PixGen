@@ -15,14 +15,23 @@ export class ModalModel {
     }
 
     /** Build the full Modal web endpoint URL for a given function name */
-
     private endpointUrl(fnName: string): string {
-        // Modal pattern: https://{user}--{app}-{function}[-dev].modal.run
-
+        // Modal pattern for this app: https://{user}--pixgen-gpu-{function}[-dev].modal.run
         return `${this.baseUrl}-${fnName}${this.devSuffix}.modal.run`;
     }
 
-    public async trainModel(zipUrl: string, triggerWord: string, modelId: string) {
+    public async trainModel(
+        zipUrl: string,
+        triggerWord: string,
+        modelId: string,
+        modelDetails: {
+            type: string;
+            age: number;
+            ethnicity: string;
+            eyeColor: string;
+            bald: boolean;
+        }
+    ) {
 
         const response = await fetch(this.endpointUrl("train"), {
 
@@ -34,6 +43,7 @@ export class ModalModel {
                 zipUrl,
                 triggerWord,
                 modelId,
+                modelDetails,
                 webhookUrl: `${this.webhookBaseUrl}/modal/webhook/train`,
             }),
         });

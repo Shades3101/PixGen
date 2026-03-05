@@ -46,7 +46,13 @@ export const AiTraining = async (req: Request, res: Response) => {
 
         (async () => {
             try {
-                await modalModel.trainModel(parsedBody.data.zipUrl, triggerWord, data.id,);
+                await modalModel.trainModel(parsedBody.data.zipUrl, triggerWord, data.id, {
+                    type: parsedBody.data.type,
+                    age: parsedBody.data.age,
+                    ethnicity: parsedBody.data.ethnicity,
+                    eyeColor: parsedBody.data.eyeColor,
+                    bald: parsedBody.data.bald,
+                });
                 console.log(`Modal training request accepted for model ${data.id}`);
             } catch (err) {
                 console.error(`Modal training request failed for model ${data.id}:`, err);
