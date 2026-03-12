@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 
+## 2026-03-13
+
+### Changed — Modal Compute Modularization
+
+- **Split `src/main.py` into 4 focused modules**. The 612-line monolith is now a clean dependency DAG with no circular imports.
+  - **`config.py`**: `TrainConfig`, `BASE_MODEL`, `VAE_MODEL`, `MODEL_DIR`, `DIFFUSERS_*`, `DEFAULT_NEGATIVE_PROMPT`, `ETHNICITY_MAP`.
+  - **`storage.py`**: `_sign_payload`, `_send_webhook`, `_upload_to_s3`, `_pil_to_bytes`.
+  - **`preprocessing.py`**: `_prepare_training_images`, `_preprocess_training_images`, `_build_training_prompts`.
+  - **`app.py`**: Modal `app`, `gpu_image`, `download_models`, `train` endpoint, `SDXLInference`.
+- **Deleted `src/main.py`**: Removed entirely. `modal deploy src/app.py` is the new entry point.
+- **`requirements.txt` stripped**: From 35 transitive-dep lines → single `modal==1.3.4`. GPU container deps stay in `gpu_image` inside `app.py`.
+- **`VAE_MODEL` constant extracted**: `"madebyollin/sdxl-vae-fp16-fix"` was hardcoded twice — promoted to a named constant in `config.py`.
+- **`DEFAULT_NEGATIVE_PROMPT` deduplication**: Inline negative prompt in `SDXLInference.generate()` was a shorter, divergent copy. Replaced with the canonical import from `config.py`.
+- **Modal bundle fix**: Added `.add_local_python_source("config", "storage", "preprocessing", copy=True)` before `run_function(download_models)` so sibling modules are baked into the container image before the build step executes.
+- **`README.md` updated**: Project structure tree and `modal deploy` command updated to reflect `app.py` as entry point and list all four `src/` modules.
+
+---
+
 ## 2026-03-05
 
 ### Added — SDXL Optimization Suite (9 Optimizations)

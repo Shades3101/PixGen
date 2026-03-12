@@ -1,7 +1,21 @@
+"""
+Modal app — SDXL LoRA training + inference endpoints.
+
+Imports all shared pieces from the sibling modules:
+  config.py        – TrainConfig, BASE_MODEL, constants
+  storage.py       – S3, webhook helpers
+  preprocessing.py – image prep & prompt builder
+"""
 import modal
-import os
 from pathlib import Path
-from dataclasses import dataclass
+
+from config import BASE_MODEL, VAE_MODEL, DIFFUSERS_REPO, DIFFUSERS_REF, MODEL_DIR, TrainConfig, DEFAULT_NEGATIVE_PROMPT
+from storage import _upload_to_s3, _pil_to_bytes, _send_webhook
+from preprocessing import (
+    _prepare_training_images,
+    _preprocess_training_images,
+    _build_training_prompts,
+)
 
 # ─────────────────────────────────────────────────────────────────
 # App & Volume
@@ -10,14 +24,6 @@ from dataclasses import dataclass
 app = modal.App("pixgen-gpu")
 
 volume = modal.Volume.from_name("pixgen_models", create_if_missing=True)
-MODEL_DIR = "/models"
-
-# Base model for SDXL LoRA training
-# NOTE: To upgrade to FLUX.1-dev later (better quality, needs A100-40GB):
-#   Change to: BASE_MODEL = "black-forest-labs/FLUX.1-dev"
-BASE_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
-DIFFUSERS_REPO = "https://github.com/huggingface/diffusers.git"
-DIFFUSERS_REF = "v0.31.0"  # pinned for reproducibility
 
 # ─────────────────────────────────────────────────────────────────
 # Container Image — all ML deps baked in at build time
@@ -61,6 +67,7 @@ gpu_image = (
     )
 )
 
+
 def download_models():
     """
     Download the SDXL base model and VAE at image build time.
@@ -72,7 +79,7 @@ def download_models():
 
     print("Downloading SDXL-fp16 VAE...")
     AutoencoderKL.from_pretrained(
-        "madebyollin/sdxl-vae-fp16-fix", 
+        VAE_MODEL,
         torch_dtype=torch.float16
     )
 
@@ -84,264 +91,31 @@ def download_models():
         use_safetensors=True,
     )
 
-# Run the download function as the final step in the image build
+
+# Bundle sibling modules FIRST so `from config import ...` resolves
+# when Modal imports app.py to locate download_models
+gpu_image = gpu_image.add_local_python_source("config", "storage", "preprocessing", copy=True)
+
+# Then bake the model weights into the image
 gpu_image = gpu_image.run_function(download_models)
-
-
-# ─────────────────────────────────────────────────────────────────
-# Training configuration — tuned for face/person LoRA  
-# ─────────────────────────────────────────────────────────────────
-
-@dataclass
-class TrainConfig:
-    """Hyperparameters for SDXL LoRA DreamBooth training on faces.
-    
-    Budget-optimized for $5 total:
-      - T4 GPU (~$0.59/hr) + 500 steps ≈ $0.15 per training run
-      - ~33 training runs + 500s of inferences within $5
-    """
-    max_train_steps: int = 500           # ~15 min on T4, enough for 10-20 face images
-    learning_rate: float = 1e-4          # standard for LoRA
-    lora_rank: int = 8                   # good balance of quality vs speed
-    resolution: int = 1024                # 🔥 Native SDXL resolution (enabled by 8-bit Adam)
-    train_batch_size: int = 1            # keep at 1 for T4's 16GB VRAM
-    gradient_accumulation_steps: int = 2 # effective batch size of 2
-    lr_scheduler: str = "constant"       # constant works well for short LoRA runs
-    seed: int = 42
-    mixed_precision: str = "no"          # fp32: fp16 has known gradient scaler bugs with peft LoRA
-    gradient_checkpointing: bool = True  # save VRAM at slight speed cost
-    use_8bit_adam: bool = True 
-    set_grads_to_none: bool = True
-
-
-# ─────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────
-
-# Default negative prompt for portrait/headshot LoRA
-DEFAULT_NEGATIVE_PROMPT = (
-    "blurry, low quality, low resolution, deformed, disfigured, "
-    "bad anatomy, wrong proportions, extra limbs, cloned face, ugly, "
-    "oversaturated, cartoon, anime, illustration, painting, drawing, "
-    "watermark, text, signature, cropped, out of frame"
-)
-
-
-def _sign_payload(payload: dict) -> str:
-    """Create HMAC-SHA256 signature for webhook payload.
-    
-    IMPORTANT: The Express backend verifies with:
-        crypto.createHmac("sha256", secret).update(JSON.stringify(req.body)).digest("hex")
-    
-    JS JSON.stringify produces compact JSON: {"key":"value"} (NO spaces)
-    Python json.dumps must match exactly with separators=(",", ":")
-    """
-    import json, hmac, hashlib
-    secret = os.environ["MODAL_WEBHOOK_SECRET"]
-    body = json.dumps(payload, separators=(",", ":"))
-    return hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
-
-
-def _send_webhook(webhook_url: str, payload: dict):
-    """Send signed webhook to Express backend (with retry for Render cold starts)."""
-    import requests, time
-    signature = _sign_payload(payload)
-    
-    # Retry up to 3 times — Render free tier can take 30+ seconds to wake up
-    for attempt in range(3):
-        try:
-            resp = requests.post(
-                webhook_url,
-                json=payload,
-                headers={"X-Modal-Signature": signature},
-                timeout=60,  # 60s to handle Render cold starts
-            )
-            print(f"[WEBHOOK] Sent successfully (status {resp.status_code})")
-            return
-        except Exception as e:
-            print(f"[WEBHOOK] Attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(5)  # wait 5s before retry
-    
-    print(f"[WEBHOOK ERROR] All 3 attempts failed for {webhook_url}")
-
-
-def _upload_to_s3(image_bytes: bytes, s3_key: str, content_type: str = "image/png") -> str:
-    """Upload bytes to S3/R2 and return the public URL."""
-    import boto3
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=os.environ["S3_ENDPOINT"],
-        aws_access_key_id=os.environ["S3_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["S3_SECRET_KEY"],
-    )
-    bucket = os.environ["S3_BUCKET_NAME"]
-    s3.put_object(
-        Bucket=bucket,
-        Key=s3_key,
-        Body=image_bytes,
-        ContentType=content_type,
-    )
-    # Use public URL (S3_ENDPOINT is the private API endpoint, not browser-accessible)
-    public_url = os.environ["S3_PUBLIC_URL"]
-    return f"{public_url}/{s3_key}"
-
-
-def _pil_to_bytes(image) -> bytes:
-    """Convert a PIL Image to PNG bytes."""
-    import io
-    buf = io.BytesIO()
-    image.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _prepare_training_images(zip_url: str, output_dir: str) -> str:
-    """Download and extract training images from a ZIP URL.
-    
-    Returns the directory containing the extracted images.
-    """
-    import requests, zipfile, io
-    from pathlib import Path
-    
-    img_dir = Path(output_dir)
-    img_dir.mkdir(parents=True, exist_ok=True)
-    
-    print(f"[TRAIN] Downloading training images from {zip_url}")
-    resp = requests.get(zip_url, timeout=120)
-    resp.raise_for_status()
-    
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as z:
-        z.extractall(str(img_dir))
-    
-    # Flatten: if the zip had a single subdirectory, use that instead
-    subdirs = [d for d in img_dir.iterdir() if d.is_dir()]
-    if len(subdirs) == 1 and not any(img_dir.glob("*.jpg")) and not any(img_dir.glob("*.png")):
-        img_dir = subdirs[0]
-    
-    # Count images
-    image_files = list(img_dir.glob("*.jpg")) + list(img_dir.glob("*.jpeg")) + \
-                  list(img_dir.glob("*.png")) + list(img_dir.glob("*.webp"))
-    print(f"[TRAIN] Found {len(image_files)} training images in {img_dir}")
-    
-    if len(image_files) == 0:
-        raise ValueError("No training images found in the uploaded ZIP file")
-    
-    return str(img_dir)
-
-
-def _preprocess_training_images(input_dir: str, output_dir: str, target_size: int = 1024) -> str:
-    """Auto-crop faces, resize, and filter training images.
-    
-    Center-crops to square, resizes to target resolution, and saves as PNG
-    for consistent training quality. Skips corrupt/unreadable images.
-    """
-    from PIL import Image
-    from pathlib import Path
-
-    in_path = Path(input_dir)
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
-
-    image_files = (
-        list(in_path.glob("*.jpg")) + list(in_path.glob("*.jpeg")) +
-        list(in_path.glob("*.png")) + list(in_path.glob("*.webp"))
-    )
-
-    processed = 0
-    for img_file in image_files:
-        try:
-            img = Image.open(img_file).convert("RGB")
-
-            # Center crop to square
-            w, h = img.size
-            min_dim = min(w, h)
-            left = (w - min_dim) // 2
-            top = (h - min_dim) // 2
-            img = img.crop((left, top, left + min_dim, top + min_dim))
-
-            # Resize to target resolution
-            img = img.resize((target_size, target_size), Image.LANCZOS)
-
-            # Save as PNG for consistent quality
-            img.save(out_path / f"{img_file.stem}.png", "PNG")
-            processed += 1
-
-        except Exception as e:
-            print(f"[PREPROCESS] Skipping {img_file.name}: {e}")
-
-    print(f"[PREPROCESS] Processed {processed}/{len(image_files)} images")
-    return str(out_path)
 
 
 # ─────────────────────────────────────────────────────────────────
 # TRAINING ENDPOINT
 # ─────────────────────────────────────────────────────────────────
 
-# Map frontend ethnicity values to natural language descriptions
-ETHNICITY_MAP = {
-    "White": "white",
-    "Black": "black",
-    "AsianAmerican": "Asian American",
-    "EastAsian": "East Asian",
-    "SouthEastAsian": "Southeast Asian",
-    "SouthAsian": "South Asian",
-    "MiddleEastern": "Middle Eastern",
-    "Pacific": "Pacific Islander",
-    "Hispanic": "Hispanic",
-}
-
-
-def _build_training_prompts(trigger_word: str, model_details: dict | None) -> tuple[str, str]:
-    """Build instance_prompt and class_prompt from model details.
-
-    Returns (instance_prompt, class_prompt).
-    - instance_prompt: describes THIS specific person (with trigger word)
-    - class_prompt: describes the general category (for prior preservation)
-    """
-    if not model_details:
-        return f"a photo of {trigger_word} person", "a photo of a person"
-
-    # Build a natural description: "a 25 year old South Asian man"
-    parts = []
-    if model_details.get("age"):
-        parts.append(f"{model_details['age']} year old")
-    if model_details.get("ethnicity"):
-        ethnicity = ETHNICITY_MAP.get(model_details["ethnicity"], model_details["ethnicity"])
-        parts.append(ethnicity)
-
-    # Type: Man/Woman/Others → man/woman/person
-    type_val = model_details.get("type", "person")
-    type_word = {"Man": "man", "Woman": "woman"}.get(type_val, "person")
-    parts.append(type_word)
-
-    description = " ".join(parts)  # e.g. "25 year old South Asian man"
-
-    # Add extra traits
-    traits = []
-    if model_details.get("eyeColor"):
-        traits.append(f"{model_details['eyeColor'].lower()} eyes")
-    if model_details.get("bald"):
-        traits.append("bald")
-
-    trait_str = f", {', '.join(traits)}" if traits else ""
-
-    instance_prompt = f"a photo of {trigger_word} {description}{trait_str}"
-    class_prompt = f"a photo of a {description}"
-
-    return instance_prompt, class_prompt
-
 @app.function(
     image=gpu_image,
     gpu="T4",                           # T4 ~$0.59/hr (SDXL fits in 16GB VRAM)
     volumes={MODEL_DIR: volume},
-    timeout=1200,                      # 20 min safety cap (500 steps ≈ 8 min)
+    timeout=1200,                       # 20 min safety cap (500 steps ≈ 8 min)
     secrets=[modal.Secret.from_name("PixGen-Secrets")],
 )
 @modal.fastapi_endpoint(method="POST")
 def train(data: dict):
     """
     Fine-tune SDXL with LoRA on user-uploaded face images.
-    
+
     Expected payload:
     {
         "zipUrl":      "https://...",           # URL to ZIP of training images
@@ -383,16 +157,16 @@ def train(data: dict):
         # ── Step 2: Run LoRA fine-tuning via accelerate ─────────
         #    Uses the official HuggingFace DreamBooth LoRA SDXL script
         #    Reference: https://huggingface.co/docs/diffusers/training/dreambooth
-        
+
         training_script = "/diffusers/examples/dreambooth/train_dreambooth_lora_sdxl.py"
-        
+
         # Build the accelerate launch command
         cmd = [
             "accelerate", "launch",
             "--mixed_precision", config.mixed_precision,
             training_script,
             "--pretrained_model_name_or_path", BASE_MODEL,
-            "--pretrained_vae_model_name_or_path", "madebyollin/sdxl-vae-fp16-fix",  # prevents NaN in fp16
+            "--pretrained_vae_model_name_or_path", VAE_MODEL,  # prevents NaN in fp16
             "--instance_data_dir",             train_data_dir,
             "--output_dir",                    output_dir,
             "--instance_prompt",               instance_prompt,
@@ -443,7 +217,7 @@ def train(data: dict):
 
         # ── Step 3: Verify output & commit to volume ────────────
         lora_weights_path = Path(output_dir)
-        
+
         # The training script outputs pytorch_lora_weights.safetensors
         safetensors_file = lora_weights_path / "pytorch_lora_weights.safetensors"
         if not safetensors_file.exists():
@@ -513,9 +287,7 @@ class SDXLInference:
 
     @modal.enter()
     def setup(self):
-
         """Runs ONCE when container boots. Model stays in VRAM."""
-
         import torch
         from diffusers import StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler
 
@@ -559,11 +331,7 @@ class SDXLInference:
         height = data.get("height", 768)
 
         # Default negative prompt (Optimization 4)
-        negative_prompt = data.get("negativePrompt",
-            "blurry, low quality, deformed, disfigured, cartoon, anime, "
-            "illustration, painting, drawing, bad anatomy, wrong proportions, "
-            "extra limbs, cloned face, ugly, oversaturated"
-        )
+        negative_prompt = data.get("negativePrompt", DEFAULT_NEGATIVE_PROMPT)
 
         status = "Generated"
         image_url = ""

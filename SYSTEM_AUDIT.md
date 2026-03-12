@@ -160,7 +160,7 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
 
 ## 🐍 Modal Compute Issues
 
-### GPU Service (`apps/modal-compute/src/main.py`)
+### GPU Service (`apps/modal-compute/src/`)
 - [x] **No Retry Logic on Webhook Failures**: Fixed by adding 3-attempt exponential backoff retry and a 60-second timeout to mitigate Render backend cold wake-ups.
 
 - [x] **Hardcoded Training Parameters**: Resolution upgraded from 512 → 1024, enabled 8-bit Adam + `set_grads_to_none` for memory-efficient full-resolution training. Training config is now tuned for optimal cost/quality (Opt 2).
@@ -245,7 +245,7 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
 | Zod | ^4.3.6 | common | ✅ Current |
 | Bun | 1.3.3 | Root | ✅ Current |
 | Turbo | ^2.8.9 | Root | ✅ Current |
-| Modal (Python) | 1.2.6 | modal-compute | ✅ Current |
+| Modal (Python) | 1.3.4 | modal-compute | ✅ Current |
 
 ### Monorepo Workspace Map
 
@@ -350,4 +350,9 @@ To move beyond the current development state, the following changes are required
   - **URL Routing Fix**: Added `label="pixgen-gpu-generate"` to class-based endpoint for consistent URL pattern. Updated `ModalModel.ts` with clean `endpointUrl()` helper.
   - **Modal 1.0 Migration**: Renamed deprecated APIs (`web_endpoint` → `fastapi_endpoint`, `container_idle_timeout` → `scaledown_window`).
   - **Colab Validation**: Benchmarked on free T4 GPU — 21.4× compile speedup, 8.4 GB peak VRAM, all optimizations verified.
-  - **Deployed** to Modal production: `pixgen-gpu-train` + `pixgen-gpu-generate` endpoints live.
+- **2026-03-13**: Modal compute modularization:
+  - **Split `src/main.py` → 4 modules**: `config.py` (constants/TrainConfig), `storage.py` (S3/webhook I/O), `preprocessing.py` (image pipeline/prompt builder), `app.py` (Modal orchestrator). Clean acyclic import DAG verified.
+  - **Deleted `src/main.py`** and updated `README.md` deploy command to `modal deploy src/app.py`.
+  - **`requirements.txt`** reduced from 35 lines → `modal==1.3.4` only. GPU deps remain in `gpu_image`.
+  - **Deduplication**: `VAE_MODEL` constant extracted to `config.py`; inline negative prompt in `generate()` replaced with `DEFAULT_NEGATIVE_PROMPT` import.
+  - **Modal bundle fix**: `add_local_python_source(..., copy=True)` placed before `run_function(download_models)` to bake sibling modules into the image before the build step.

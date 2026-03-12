@@ -167,7 +167,11 @@ PixGen/
 │   │   ├── models/        # ModalModel — GPU endpoint abstraction
 │   │   └── routes/        # Express route definitions
 │   ├── modal-compute/     # Modal compute workers (Python)
-│   │   └── src/main.py    # SDXL training & inference pipeline
+│   │   └── src/
+│   │       ├── app.py           # Modal app, train endpoint, SDXLInference
+│   │       ├── config.py        # TrainConfig, BASE_MODEL, constants
+│   │       ├── storage.py       # S3, webhook helpers
+│   │       └── preprocessing.py # Image prep & prompt builder
 ├── packages/
 │   ├── common/            # Shared Zod schemas, Types & Constants
 │   ├── db/                # Prisma Schema & Database Client
@@ -253,7 +257,7 @@ The core entities in the PostgreSQL database:
    # Windows: .\venv\Scripts\Activate.ps1
    # Mac/Linux: source venv/bin/activate
    pip install -r requirements.txt
-   modal deploy src/main.py
+   modal deploy src/app.py
    ```
 
 5. **Launch the platform**:
