@@ -68,36 +68,13 @@ gpu_image = (
 )
 
 
-def download_models():
-    """
-    Download the SDXL base model and VAE at image build time.
-    Baking these into the Modal image prevents a 5-minute 6.5GB download
-    every time a new container boots up (cold start).
-    """
-    import torch
-    from diffusers import StableDiffusionXLPipeline, AutoencoderKL
-
-    print("Downloading SDXL-fp16 VAE...")
-    AutoencoderKL.from_pretrained(
-        VAE_MODEL,
-        torch_dtype=torch.float16
-    )
-
-    print("Downloading SDXL base model (fp16 variant)...")
-    StableDiffusionXLPipeline.from_pretrained(
-        BASE_MODEL,
-        torch_dtype=torch.float16,
-        variant="fp16",
-        use_safetensors=True,
-    )
-
-
-# Bundle sibling modules FIRST so `from config import ...` resolves
-# when Modal imports app.py to locate download_models
+# Bundle sibling modules into the image
 gpu_image = gpu_image.add_local_python_source("config", "storage", "preprocessing", copy=True)
 
-# Then bake the model weights into the image
-gpu_image = gpu_image.run_function(download_models)
+# NOTE: Models are downloaded at runtime inside SDXLInference.setup() and cached in the
+# Modal Volume (pixgen_models).  We intentionally do NOT use gpu_image.run_function() to
+# download models at image-build time — that path hits Modal's heartbeat timeout because
+# the 6 GB SDXL download takes longer than the build-phase connection allows.
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -178,12 +155,6 @@ def train(data: dict):
             "--max_train_steps",               str(config.max_train_steps),
             "--seed",                          str(config.seed),
             "--rank",                          str(config.lora_rank),
-            # Prior Preservation Loss (Optimization 8) — prevents overfitting
-            "--with_prior_preservation_loss",
-            "--prior_loss_weight", "1.0",
-            "--class_data_dir", "/tmp/class_images",
-            "--class_prompt", class_prompt,
-            "--num_class_images", "50",  # balance of quality vs cost
         ]
 
         # Add memory optimization flags
@@ -191,18 +162,23 @@ def train(data: dict):
             cmd.append("--gradient_checkpointing")
         if config.use_8bit_adam:
             cmd.append("--use_8bit_adam")         # 70% less optimizer VRAM
-        if config.set_grads_to_none:
-            cmd.append("--set_grads_to_none")     # free a bit more VRAM
+        # NOTE: --set_grads_to_none not supported by the pinned training script (diffusers 0.31.0)
 
         print(f"[TRAIN] Starting LoRA fine-tuning for model {model_id}")
         print(f"[TRAIN] Trigger word: '{trigger_word}'")
         print(f"[TRAIN] Command: {' '.join(cmd)}")
+
+        import os
+        train_env = os.environ.copy()
+        # Prevent memory fragmentation (recommended in the OOM error message)
+        train_env["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=1000,  # 16 min subprocess timeout (< Modal's 20 min)
+            env=train_env,
         )
 
         if result.returncode != 0:
@@ -287,13 +263,47 @@ class SDXLInference:
 
     @modal.enter()
     def setup(self):
-        """Runs ONCE when container boots. Model stays in VRAM."""
-        import torch
-        from diffusers import StableDiffusionXLPipeline, EulerAncestralDiscreteScheduler
+        """
+        Runs ONCE when a container boots.  Model stays in VRAM between requests.
 
-        print("[SETUP] Loading SDXL base model into VRAM...")
+        Models are pulled from HuggingFace Hub on first boot and cached in the
+        Modal Volume so subsequent cold-starts skip the download entirely.
+        """
+        import torch
+        from diffusers import StableDiffusionXLPipeline, AutoencoderKL, EulerAncestralDiscreteScheduler
+        from pathlib import Path
+
+        # ── Download models to Volume cache on first boot ────────────────
+        vae_cache   = Path("/models/_hf_cache/vae")
+        base_cache  = Path("/models/_hf_cache/sdxl_base")
+
+        if not vae_cache.exists():
+            print("[SETUP] Downloading SDXL-fp16 VAE to Volume cache...")
+            vae_cache.mkdir(parents=True, exist_ok=True)
+            AutoencoderKL.from_pretrained(
+                VAE_MODEL,
+                torch_dtype=torch.float16,
+            ).save_pretrained(str(vae_cache))
+            volume.commit()
+            print("[SETUP] VAE cached.")
+
+        if not base_cache.exists():
+            print("[SETUP] Downloading SDXL base model to Volume cache...")
+            base_cache.mkdir(parents=True, exist_ok=True)
+            StableDiffusionXLPipeline.from_pretrained(
+                BASE_MODEL,
+                torch_dtype=torch.float16,
+                variant="fp16",
+                use_safetensors=True,
+            ).save_pretrained(str(base_cache))
+            volume.commit()
+            print("[SETUP] SDXL base model cached.")
+        else:
+            print("[SETUP] Loading SDXL base model from Volume cache...")
+
+        # ── Load pipeline from Volume cache ──────────────────────────────
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
-            BASE_MODEL,
+            str(base_cache),
             torch_dtype=torch.float16,
             variant="fp16",
             use_safetensors=True,

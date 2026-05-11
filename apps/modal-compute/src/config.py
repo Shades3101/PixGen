@@ -56,7 +56,7 @@ class TrainConfig:
     gradient_accumulation_steps: int = 2 # effective batch size of 2
     lr_scheduler: str = "constant"       # constant works well for short LoRA runs
     seed: int = 42
-    mixed_precision: str = "no"          # fp32: fp16 has known gradient scaler bugs with peft LoRA
+    mixed_precision: str = "fp16"         # fp16: halves VRAM vs fp32; modern peft+accelerate handles gradient scaling correctly
     gradient_checkpointing: bool = True  # save VRAM at slight speed cost
     use_8bit_adam: bool = True
     set_grads_to_none: bool = True

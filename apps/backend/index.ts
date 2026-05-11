@@ -9,6 +9,13 @@ const PORT = Number(process.env.PORT ?? 8080);
 
 const app = express();
 
+// Health check endpoint for Render / uptime monitors (must be before CORS)
+app.get("/health", (_req, res) => {
+    res.status(200).json({
+        status: "ok"
+    });
+});
+
 app.use(cors({
     origin: process.env.FRONTEND_URL,
     credentials: true

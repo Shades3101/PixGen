@@ -1,3 +1,3 @@
 # Local only — installs the Modal CLI for `modal deploy / serve`
 # GPU container deps are declared in gpu_image inside src/app.py
-modal==1.3.4
+modal==1.4.2
