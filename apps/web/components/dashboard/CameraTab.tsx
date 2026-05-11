@@ -20,20 +20,25 @@ const CameraTab = () => {
     const [loading, setLoading] = useState(true);
     const { getToken } = useAuth();
 
+    const fetchImages = async () => {
+        try {
+            const token = await getToken();
+            const response = await axios.get(`${BACKEND_URL}/image/bulk`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            setImages(response.data.images);
+        } catch (e) {
+            console.error("Failed to fetch images:", e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     useEffect(() => {
-        (async () => {
-            try {
-                const token = await getToken();
-                const response = await axios.get(`${BACKEND_URL}/image/bulk`, {
-                    headers: { Authorization: `Bearer ${token}` },
-                });
-                setImages(response.data.images);
-            } catch (e) {
-                console.error("Failed to fetch images:", e);
-            } finally {
-                setLoading(false);
-            }
-        })();
+        fetchImages();
+        // Poll every 5 seconds to auto-update when images finish generating
+        const interval = setInterval(fetchImages, 5000);
+        return () => clearInterval(interval);
     }, []);
 
     return (

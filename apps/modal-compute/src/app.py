@@ -83,9 +83,9 @@ gpu_image = gpu_image.add_local_python_source("config", "storage", "preprocessin
 
 @app.function(
     image=gpu_image,
-    gpu="T4",                           # T4 ~$0.59/hr (SDXL fits in 16GB VRAM)
+    gpu="A10G",                         # A10G (24GB VRAM) is the best value for SDXL training
     volumes={MODEL_DIR: volume},
-    timeout=1200,                       # 20 min safety cap (500 steps ≈ 8 min)
+    timeout=3600,                       # 1 hour safety cap (download + training)
     secrets=[modal.Secret.from_name("PixGen-Secrets")],
 )
 @modal.fastapi_endpoint(method="POST")
@@ -142,6 +142,7 @@ def train(data: dict):
             "accelerate", "launch",
             "--mixed_precision", config.mixed_precision,
             training_script,
+            "--mixed_precision", config.mixed_precision,
             "--pretrained_model_name_or_path", BASE_MODEL,
             "--pretrained_vae_model_name_or_path", VAE_MODEL,  # prevents NaN in fp16
             "--instance_data_dir",             train_data_dir,
@@ -172,12 +173,14 @@ def train(data: dict):
         train_env = os.environ.copy()
         # Prevent memory fragmentation (recommended in the OOM error message)
         train_env["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+        # Cache HuggingFace downloads in the persistent volume
+        train_env["HF_HOME"] = f"{MODEL_DIR}/_hf_cache"
 
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=1000,  # 16 min subprocess timeout (< Modal's 20 min)
+            timeout=3500,  # 58 min subprocess timeout (< Modal's 60 min)
             env=train_env,
         )
 
@@ -252,7 +255,7 @@ def train(data: dict):
 
 @app.cls(
     image=gpu_image,
-    gpu="T4",
+    gpu="L4",
     volumes={MODEL_DIR: volume},
     timeout=120,
     scaledown_window=300,  # Keep warm for 5 min between requests
@@ -302,11 +305,14 @@ class SDXLInference:
             print("[SETUP] Loading SDXL base model from Volume cache...")
 
         # ── Load pipeline from Volume cache ──────────────────────────────
+        from diffusers import AutoencoderKL
+        vae = AutoencoderKL.from_pretrained(str(vae_cache), torch_dtype=torch.float16)
+        
         self.pipe = StableDiffusionXLPipeline.from_pretrained(
             str(base_cache),
             torch_dtype=torch.float16,
-            variant="fp16",
             use_safetensors=True,
+            vae=vae,
         )
 
         # Optimization 3: Fast scheduler

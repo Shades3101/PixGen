@@ -45,18 +45,18 @@ class TrainConfig:
     """Hyperparameters for SDXL LoRA DreamBooth training on faces.
 
     Budget-optimized for $5 total:
-      - T4 GPU (~$0.59/hr) + 500 steps ≈ $0.15 per training run
-      - ~33 training runs + 500s of inferences within $5
+      - A10G GPU (~$1.10/hr) + 500 steps ≈ 5-8 mins per training run
+      - ~30 training runs + inferences within $5
     """
-    max_train_steps: int = 500           # ~15 min on T4, enough for 10-20 face images
+    max_train_steps: int = 500           # ~5-8 min on A10G, enough for 10-20 face images
     learning_rate: float = 1e-4          # standard for LoRA
     lora_rank: int = 8                   # good balance of quality vs speed
     resolution: int = 1024               # Native SDXL resolution (enabled by 8-bit Adam)
-    train_batch_size: int = 1            # keep at 1 for T4's 16GB VRAM
+    train_batch_size: int = 1            # keep at 1 for stability; use gradient_accumulation for larger effective batch
     gradient_accumulation_steps: int = 2 # effective batch size of 2
     lr_scheduler: str = "constant"       # constant works well for short LoRA runs
     seed: int = 42
-    mixed_precision: str = "fp16"         # fp16: halves VRAM vs fp32; modern peft+accelerate handles gradient scaling correctly
+    mixed_precision: str = "bf16"        # bf16: native Ampere (A10G) support, prevents NaN loss and scaling issues
     gradient_checkpointing: bool = True  # save VRAM at slight speed cost
     use_8bit_adam: bool = True
     set_grads_to_none: bool = True

@@ -148,14 +148,19 @@ const GenerateTab = () => {
             <div className="lg:col-span-2">
                 <div className="aspect-[4/3] border-2 border-dashed border-border bg-secondary flex flex-col items-center justify-center text-muted-foreground gap-4">
                     {generated ? (
-                        <div className="text-center space-y-3">
+                        <div className="text-center space-y-3 flex flex-col items-center">
                             <div className="p-4 rounded-full bg-primary/10 border border-primary/30 inline-block">
                                 <Wand2 size={48} className="text-primary" />
                             </div>
                             <p className="font-bold uppercase tracking-widest text-sm text-primary">Generation Triggered!</p>
-                            <p className="text-xs label-mono max-w-xs">
+                            <p className="text-xs label-mono max-w-xs mb-4">
                                 Your image is being generated. Check the Camera tab to see it once ready.
                             </p>
+                            <a href="/dashboard?tab=camera">
+                                <Button className="bg-primary text-primary-foreground uppercase font-bold tracking-widest text-xs">
+                                    Go to Camera
+                                </Button>
+                            </a>
                         </div>
                     ) : (
                         <>

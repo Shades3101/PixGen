@@ -77,6 +77,10 @@ def _preprocess_training_images(input_dir: str, output_dir: str, target_size: in
             print(f"[PREPROCESS] Skipping {img_file.name}: {e}")
 
     print(f"[PREPROCESS] Processed {processed}/{len(image_files)} images")
+    
+    if processed == 0:
+        raise ValueError("No valid training images could be processed. Please ensure the ZIP contains standard JPG/PNG images.")
+
     return str(out_path)
 
 
