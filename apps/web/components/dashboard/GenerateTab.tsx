@@ -57,15 +57,7 @@ const GenerateTab = () => {
         })();
     }, []);
 
-    useEffect(() => {
-        if (selectedModel && models.length > 0) {
-            const model = models.find(m => m.id === selectedModel);
-            if (model?.triggerWord && !prompt.includes(model.triggerWord)) {
-                const tw = model.triggerWord;
-                setPrompt(prev => prev ? `${prev} ${tw}` : tw);
-            }
-        }
-    }, [selectedModel, models]);
+    // Automatic trigger word injection is handled in handleGenerate
 
     const handleGenerate = async () => {
 
@@ -78,8 +70,16 @@ const GenerateTab = () => {
 
         try {
             const token = await getToken();
+            const model = models.find(m => m.id === selectedModel);
+            const triggerWord = model?.triggerWord;
+
+            // Automatically inject trigger word if not already present in prompt
+            const finalPrompt = (triggerWord && !prompt.includes(triggerWord)) 
+                ? `${prompt} ${triggerWord}` 
+                : prompt;
+
             await axios.post(`${BACKEND_URL}/ai/generate`,{ 
-                prompt, 
+                prompt: finalPrompt, 
                 modelId: selectedModel,
                 num: 1 
             }, { 
@@ -130,13 +130,7 @@ const GenerateTab = () => {
                             <>
                                 <div className="grid grid-cols-2 gap-2">
                                     {models.map((model) => (
-                                        <div key={model.id} onClick={() => {
-                                            setSelectedModel(model.id);
-                                            if (model.triggerWord && !prompt.includes(model.triggerWord)) {
-                                                const tw = model.triggerWord;
-                                                setPrompt(prev => prev ? `${prev} ${tw}` : tw);
-                                            }
-                                        }}
+                                        <div key={model.id} onClick={() => setSelectedModel(model.id)}
                                             className={`p-2 border cursor-pointer transition-all ${selectedModel === model.id
                                                 ? "border-primary bg-primary/10"
                                                 : "border-border hover:border-foreground/30"
@@ -158,21 +152,8 @@ const GenerateTab = () => {
                                             </Badge>
                                         </div>
                                         <p className="text-[9px] text-muted-foreground leading-relaxed italic">
-                                            Include this word in your prompt to activate your face!
+                                            The model is active. Your trigger word will be added automatically!
                                         </p>
-                                        <Button 
-                                            variant="secondary" 
-                                            size="sm" 
-                                            className="w-full h-7 text-[10px] uppercase font-bold tracking-wider"
-                                            onClick={() => {
-                                                const tw = models.find(m => m.id === selectedModel)?.triggerWord;
-                                                if (tw && !prompt.includes(tw)) {
-                                                    setPrompt(prev => prev ? `${prev} ${tw}` : tw);
-                                                }
-                                            }}
-                                        >
-                                            Add Trigger Word
-                                        </Button>
                                     </div>
                                 )}
                             </>

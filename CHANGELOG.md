@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## 2026-05-11
 
+### Added — Trigger Word UX & Automation
+- **Automatic Trigger Word Injection**: Implemented invisible trigger word injection in `GenerateTab.tsx`. The model's unique activation word is now appended to the prompt right before the API call, keeping the user's input area clean while ensuring the LoRA model functions correctly.
+- **Trigger Word Visibility**: Added trigger word displays to the **Models** and **Generate** tabs, giving users clear visibility into the activation word being used by the system.
+- **TS Error Fixes**: Resolved strict TypeScript errors in `GenerateTab.tsx` related to `SetStateAction<string>` vs `string | undefined` by capturing model properties in local constants.
+- **Improved Messaging**: Updated the UI to clearly state that the model is active and the trigger word is handled automatically, removing the need for manual buttons.
+
 ### Fixed — SDXL Reliability & Modal Integration
 - **Resolved `variant=fp16` Loading Bug**: Fixed `ValueError` in `app.py` caused by `diffusers` looking for non-existent `.fp16.safetensors` files in the local cache. Removed `variant="fp16"` from local `from_pretrained` calls.
 - **Fixed Black Image Generation**: Explicitly loaded and passed the cached fp16-fixed VAE (`madebyollin/sdxl-vae-fp16-fix`) to the pipeline to prevent NaNs/black images during fp16 inference.

@@ -373,6 +373,7 @@ To move beyond the current development state, the following changes are required
   - **Bug Fix: Black Image Generation**: Fixed issue where SDXL produced black images (NaNs) in fp16 by explicitly passing the fixed fp16 VAE to the pipeline.
   - **Bug Fix: Modal URL Alignment**: Simplified labels in `app.py` to `"train"` and `"generate"` to match the backend's expected URL structure. Updated `.env` and `ModalModel.ts`.
   - **Bug Fix: `torch.compile` LoRA Incompatibility**: Disabled `torch.compile` on the UNet to fix adapter registration errors and eliminate compilation delays for new LoRAs.
+  - **UX: Trigger Word Automation**: Implemented invisible, automatic trigger word injection in the generation pipeline. Resolved a common user point of failure where LoRA models wouldn't activate due to missing trigger words. Added trigger word visibility to Model and Generate tabs.
   - **UX: Camera Polling**: Added 5-second auto-refresh to `CameraTab.tsx` and "Go to Camera" button to `GenerateTab.tsx`.
   - **UX: Failed State Handling**: Updated `CameraTab.tsx` to display "Generation Failed" for errored images, preventing infinite "Generating..." spins.
   - **Health Check**: Verified and documented the `GET /health` endpoint for backend monitoring.
