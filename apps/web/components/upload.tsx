@@ -5,11 +5,13 @@ import { Button } from "@/components/ui/button"
 import axios from "axios";
 import { BACKEND_URL, CLOUDFLARE_URL } from "@/app/config";
 import { useState } from "react";
+import { useAuth } from "@clerk/nextjs";
 import JSZip from "jszip";
 
 export function Upload({ onUploadDone }: { onUploadDone: (zipUrl: string) => void }) {
   const [images, setImages] = useState<string[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const { getToken } = useAuth();
 
   return (
     <Card>
@@ -34,7 +36,10 @@ export function Upload({ onUploadDone }: { onUploadDone: (zipUrl: string) => voi
 
             try {
               const zip = new JSZip();
-              const res = await axios.get(`${BACKEND_URL}/pre-signed-url`);
+              const token = await getToken();
+              const res = await axios.get(`${BACKEND_URL}/pre-signed-url`, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
               const url = res.data.url;
               const key = res.data.key;
 
