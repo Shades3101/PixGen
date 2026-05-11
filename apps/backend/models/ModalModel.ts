@@ -16,8 +16,9 @@ export class ModalModel {
 
     /** Build the full Modal web endpoint URL for a given function name */
     private endpointUrl(fnName: string): string {
-        // Modal pattern for this app: https://{user}--pixgen-gpu-{function}[-dev].modal.run
-        return `${this.baseUrl}-${fnName}${this.devSuffix}.modal.run`;
+        // Updated to match actual Modal output: https://{user}--{function}.modal.run
+        // We'll use the baseUrl as the root (e.g., https://naraniakaran)
+        return `${this.baseUrl}--${fnName}${this.devSuffix}.modal.run`;
     }
 
     public async trainModel(

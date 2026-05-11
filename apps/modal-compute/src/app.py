@@ -88,7 +88,7 @@ gpu_image = gpu_image.add_local_python_source("config", "storage", "preprocessin
     timeout=3600,                       # 1 hour safety cap (download + training)
     secrets=[modal.Secret.from_name("PixGen-Secrets")],
 )
-@modal.fastapi_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST", label="train")
 def train(data: dict):
     """
     Fine-tune SDXL with LoRA on user-uploaded face images.
@@ -325,11 +325,12 @@ class SDXLInference:
 
         self.pipe.to("cuda")
 
-        # Optimization 5: torch.compile (one-time ~30s compile, then 20-30% faster)
-        self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead")
-        print("[SETUP] UNet compiled with torch.compile() — first inference will be slower")
+        # NOTE: torch.compile is disabled because it interferes with dynamic LoRA swapping 
+        # and would cause a 30s delay for the first generation of every new LoRA.
+        # self.pipe.unet = torch.compile(self.pipe.unet, mode="reduce-overhead")
+        print("[SETUP] SDXL Pipeline ready (torch.compile disabled for LoRA compatibility)")
 
-    @modal.fastapi_endpoint(method="POST", label="pixgen-gpu-generate")
+    @modal.fastapi_endpoint(method="POST", label="generate")
     def generate(self, data: dict):
         """Instant generation — model already in self.pipe."""
         import torch
@@ -359,8 +360,8 @@ class SDXLInference:
 
             # Load user's LoRA → generate → unload (keeps base model clean)
             self.pipe.load_lora_weights(lora_path, adapter_name="user_lora")
-            self.pipe.set_adapters(["user_lora"], adapter_weights=[lora_weight])
-
+            # No need for set_adapters if we only have one; load_lora_weights makes it active.
+            
             image = self.pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -371,7 +372,8 @@ class SDXLInference:
                 generator=torch.Generator("cuda").manual_seed(42),
             ).images[0]
 
-            # CRITICAL: unload LoRA so next user gets a clean base model
+            # CRITICAL: delete adapter and unload weights to free memory and keep base model clean
+            self.pipe.delete_adapters("user_lora")
             self.pipe.unload_lora_weights()
 
             s3_key = f"outputs/{model_id}/{image_id}.png"
