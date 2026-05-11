@@ -8,14 +8,16 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
-import { ImagePlus, Wand2, Loader2 } from "lucide-react";
+import { ImagePlus, Wand2, Loader2, Key } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 
 interface TModel {
     id: string;
     name: string;
     thumbnail: string;
     trainingStatus: string;
+    triggerWord?: string;
 }
 
 const GenerateTab = () => {
@@ -54,6 +56,16 @@ const GenerateTab = () => {
             }
         })();
     }, []);
+
+    useEffect(() => {
+        if (selectedModel && models.length > 0) {
+            const model = models.find(m => m.id === selectedModel);
+            if (model?.triggerWord && !prompt.includes(model.triggerWord)) {
+                const tw = model.triggerWord;
+                setPrompt(prev => prev ? `${prev} ${tw}` : tw);
+            }
+        }
+    }, [selectedModel, models]);
 
     const handleGenerate = async () => {
 
@@ -115,21 +127,55 @@ const GenerateTab = () => {
                                 <p className="text-[10px] label-mono mt-1">Train a model first in the Train tab.</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-2 gap-2">
-                                {models.map((model) => (
-                                    <div key={model.id} onClick={() => setSelectedModel(model.id)}
-                                        className={`p-2 border cursor-pointer transition-all ${selectedModel === model.id
-                                            ? "border-primary bg-primary/10"
-                                            : "border-border hover:border-foreground/30"
-                                            }`}
-                                    >
-                                        {model.thumbnail && (
-                                            <img src={model.thumbnail} alt={model.name} className="w-full aspect-square object-cover mb-2" />
-                                        )}
-                                        <p className="text-xs font-bold uppercase tracking-tight truncate">{model.name}</p>
+                            <>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {models.map((model) => (
+                                        <div key={model.id} onClick={() => {
+                                            setSelectedModel(model.id);
+                                            if (model.triggerWord && !prompt.includes(model.triggerWord)) {
+                                                const tw = model.triggerWord;
+                                                setPrompt(prev => prev ? `${prev} ${tw}` : tw);
+                                            }
+                                        }}
+                                            className={`p-2 border cursor-pointer transition-all ${selectedModel === model.id
+                                                ? "border-primary bg-primary/10"
+                                                : "border-border hover:border-foreground/30"
+                                                }`}
+                                        >
+                                            {model.thumbnail && (
+                                                <img src={model.thumbnail} alt={model.name} className="w-full aspect-square object-cover mb-2" />
+                                            )}
+                                            <p className="text-xs font-bold uppercase tracking-tight truncate">{model.name}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                {selectedModel && (
+                                    <div className="mt-4 p-3 border-harsh bg-background rounded-sm space-y-2">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-[10px] label-mono uppercase text-muted-foreground">Trigger Word</span>
+                                            <Badge variant="outline" className="text-[10px] font-mono border-primary/30 text-primary">
+                                                {models.find(m => m.id === selectedModel)?.triggerWord || "N/A"}
+                                            </Badge>
+                                        </div>
+                                        <p className="text-[9px] text-muted-foreground leading-relaxed italic">
+                                            Include this word in your prompt to activate your face!
+                                        </p>
+                                        <Button 
+                                            variant="secondary" 
+                                            size="sm" 
+                                            className="w-full h-7 text-[10px] uppercase font-bold tracking-wider"
+                                            onClick={() => {
+                                                const tw = models.find(m => m.id === selectedModel)?.triggerWord;
+                                                if (tw && !prompt.includes(tw)) {
+                                                    setPrompt(prev => prev ? `${prev} ${tw}` : tw);
+                                                }
+                                            }}
+                                        >
+                                            Add Trigger Word
+                                        </Button>
                                     </div>
-                                ))}
-                            </div>
+                                )}
+                            </>
                         )}
                     </div>
 

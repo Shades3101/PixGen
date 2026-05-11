@@ -16,6 +16,7 @@ interface TModel {
     type: string;
     thumbnail: string;
     trainingStatus: string;
+    triggerWord?: string;
     createdAt: string;
 }
 
@@ -110,10 +111,16 @@ const ModelsTab = () => {
                                 <p className="label-mono text-[10px]">{model.type}</p>
                             </div>
 
-                            <div className="flex items-center gap-4 text-xs font-mono text-muted-foreground">
-                                <span className="flex items-center gap-1">
-                                    <Info size={12} /> {new Date(model.createdAt).toLocaleDateString()}
-                                </span>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center justify-between text-[10px] label-mono text-muted-foreground bg-background/50 p-2 border border-harsh/30">
+                                    <span className="uppercase opacity-50">Trigger Word</span>
+                                    <span className="text-primary font-bold">{model.triggerWord || "N/A"}</span>
+                                </div>
+                                <div className="flex items-center gap-4 text-[10px] font-mono text-muted-foreground/60 px-1">
+                                    <span className="flex items-center gap-1">
+                                        <Info size={10} /> {new Date(model.createdAt).toLocaleDateString()}
+                                    </span>
+                                </div>
                             </div>
                         </Card>
                     ))}
