@@ -50,6 +50,7 @@ def _upload_to_s3(image_bytes: bytes, s3_key: str, content_type: str = "image/pn
         aws_secret_access_key=os.environ["S3_SECRET_KEY"],
     )
     bucket = os.environ["S3_BUCKET_NAME"]
+    print(f"[STORAGE] Uploading to S3: bucket={bucket}, key={s3_key}")
     s3.put_object(
         Bucket=bucket,
         Key=s3_key,

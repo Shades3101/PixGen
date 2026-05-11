@@ -5,7 +5,7 @@ import { useAuth } from "@clerk/nextjs";
 import axios from "axios";
 import { BACKEND_URL } from "@/app/config";
 import { Card } from "@/components/ui/card";
-import { Camera } from "lucide-react";
+import { Camera, AlertTriangle } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
 
@@ -80,6 +80,13 @@ const CameraTab = () => {
                                 alt="Generated"
                                 className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                             />
+                        ) : image.status === "Failed" ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-red-500/80 p-4 text-center space-y-2">
+                                <div className="p-2 rounded-full bg-red-500/10 mb-1">
+                                    <AlertTriangle size={20} className="text-red-500" />
+                                </div>
+                                <p className="label-mono text-[10px] uppercase font-bold text-red-500">Generation Failed</p>
+                            </div>
                         ) : (
                             <div className="w-full h-full flex items-center justify-center">
                                 <div className="text-center space-y-3">
