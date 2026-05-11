@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-05-11
+
+### Fixed — SDXL Reliability & Modal Integration
+- **Resolved `variant=fp16` Loading Bug**: Fixed `ValueError` in `app.py` caused by `diffusers` looking for non-existent `.fp16.safetensors` files in the local cache. Removed `variant="fp16"` from local `from_pretrained` calls.
+- **Fixed Black Image Generation**: Explicitly loaded and passed the cached fp16-fixed VAE (`madebyollin/sdxl-vae-fp16-fix`) to the pipeline to prevent NaNs/black images during fp16 inference.
+- **Modal Endpoint URL Alignment**: Corrected a critical URL mismatch between `ModalModel.ts` and `app.py`. Simplified labels in `app.py` to `"train"` and `"generate"` and updated the backend `.env` and `endpointUrl` logic to match the new Modal URL structure (`https://{user}--{fn}.modal.run`).
+- **Resolved `torch.compile` LoRA Error**: Disabled `torch.compile` on the UNet. Found it was causing `Adapter name(s) not in present adapters` errors during dynamic LoRA switching and introducing a 30s compilation delay for every new user model.
+- **Dashboard UX & Polling**:
+  - **Auto-Refresh**: Added 5-second polling to `CameraTab.tsx` so newly generated images appear automatically without a page refresh.
+  - **Redirect Link**: Added a "Go to Camera" button in `GenerateTab.tsx` after a generation is successfully triggered.
+  - **Error Handling**: Updated `CameraTab.tsx` to handle and display the `"Failed"` status, preventing the UI from spinning infinitely on "Generating..." when an error occurs.
+
+### Improved
+- **Webhook Logging**: Added verbose logging to `_upload_to_s3` and `_send_webhook` in `storage.py` to improve observability of the cloud storage and webhook pipeline.
+- **Health Check**: Confirmed `GET /health` endpoint is active in `apps/backend/index.ts` to support Render/uptime monitoring.
+
+---
+
 
 ## 2026-03-13
 

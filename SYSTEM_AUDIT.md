@@ -21,8 +21,8 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
   - *Impact*: Protected internal URLs and credentials from stdout exposure.
   - *Effort*: Done.
 
-- [x] **Stale `.env.example`**: `apps/backend/.env.example` still references `FAL_KEY` (removed dependency) and is missing `MODAL_BASE_URL`, `MODAL_DEV`, `MODAL_WEBHOOK_SECRET`, and `FRONTEND_URL`. Synced `.env.example` files across backend, web, and db packages to match current `.env` requirements.
-  - *Impact*: New contributors can easily set up the project without guessing required variables.
+- [x] **Modal URL Alignment Mismatch**: Corrected a critical URL mismatch where the backend was calling `...-pixgen-gpu-generate...` but Modal was hosting at `...-generate...`. Simplified labels and updated `.env`.
+  - *Impact*: Fixed "Pending" status bug; backend can now successfully reach Modal workers.
   - *Effort*: Done.
 
 - [x] **Missing Frontend `.env.example`**: Created `.env.example` in `apps/web/` with necessary Clerk and cloudflare R2 placeholders.
@@ -70,9 +70,9 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
   - *Impact*: Breaking changes to the API will affect all clients simultaneously
   - *Effort*: Low (prefix all routes with `/api/v1/`)
 
-- [ ] **No Health Check Endpoint**: No `GET /health` or `GET /status` endpoint for monitoring backend availability.
-  - *Impact*: Load balancers and monitoring tools cannot determine if the backend is healthy
-  - *Effort*: Trivial (add a simple health endpoint)
+- [x] **No Health Check Endpoint**: Added `GET /health` endpoint in `apps/backend/index.ts` to support Render and uptime monitoring.
+  - *Impact*: Load balancers and monitoring tools can now verify backend health.
+  - *Effort*: Done.
 
 - [ ] **CORS Wildcard Risk**: CORS origin is set from `process.env.FRONTEND_URL` with no fallback validation. If the env var is unset, `cors({ origin: undefined })` allows all origins.
   - *Impact*: Any website could make authenticated API requests on behalf of users
@@ -136,9 +136,9 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
   - *Impact*: User confusion — no visual feedback that upload succeeded
   - *Effort*: Low (toggle upload icon visibility based on uploaded file state)
 
-- [ ] **🔴 Remove Dead "Preview Area" in GenerateTab**: The `GenerateTab` component has a large preview area that shows "Generation Triggered!" text but never displays the actual generated image (images only appear in the Camera/gallery tab).
-  - *Impact*: Misleading UI — users expect to see their image but only get a text message
-  - *Effort*: Low (remove the preview area entirely, or replace with a redirect/link to the gallery tab)
+- [x] **🔴 Remove Dead "Preview Area" in GenerateTab**: Replaced the static "Generation Triggered!" text in `GenerateTab.tsx` with a functional "Go to Camera" button that links directly to the gallery.
+  - *Impact*: Clear user path to see their results; resolved misleading UI.
+  - *Effort*: Done.
 
 - [ ] **🔴 Dashboard Tabs Should Be Server Components**: All dashboard tabs (`GenerateTab`, `TrainTab`, `CameraTab`, `PacksTab`) are client components. Converting them to server components with targeted client islands would improve initial load performance.
   - *Impact*: Entire dashboard is client-rendered; no SSR benefits, slower initial paint, larger JS bundle
@@ -187,6 +187,18 @@ This file tracks identified issues, bugs, and areas for improvement in the PixGe
 
 - [x] **Modal API Deprecations**: Migrated `@modal.web_endpoint` → `@modal.fastapi_endpoint` and `container_idle_timeout` → `scaledown_window` per Modal 1.0 migration guide.
   - *Impact*: No more deprecation warnings; future-proofed for Modal updates.
+  - *Effort*: Done.
+
+- [x] **🔴 SDXL Cache Loading Bug**: Fixed `ValueError` in `app.py` caused by `variant="fp16"` mismatch when loading from local cache.
+  - *Impact*: Models now load successfully from the Modal Volume cache without crashing.
+  - *Effort*: Done.
+
+- [x] **🔴 Black Image (NaN) Bug**: Resolved issue where SDXL produced black images in fp16 by passsing the fixed fp16 VAE.
+  - *Impact*: High-quality image generation is now reliable in mixed-precision.
+  - *Effort*: Done.
+
+- [x] **🔴 Dynamic LoRA Adapter Error**: Fixed `Adapter not found` error by disabling `torch.compile` on the UNet and improving adapter management.
+  - *Impact*: Multi-user LoRA switching is now stable and instantaneous.
   - *Effort*: Done.
 
 - [ ] **No GPU Tier Fallback**: The service targets T4 GPUs specifically. If T4 capacity is unavailable on Modal, jobs will queue.
@@ -356,3 +368,11 @@ To move beyond the current development state, the following changes are required
   - **`requirements.txt`** reduced from 35 lines → `modal==1.3.4` only. GPU deps remain in `gpu_image`.
   - **Deduplication**: `VAE_MODEL` constant extracted to `config.py`; inline negative prompt in `generate()` replaced with `DEFAULT_NEGATIVE_PROMPT` import.
   - **Modal bundle fix**: `add_local_python_source(..., copy=True)` placed before `run_function(download_models)` to bake sibling modules into the image before the build step.
+- **2026-05-11**: Major stability and reliability sprint:
+  - **Bug Fix: SDXL `variant=fp16` Error**: Resolved `ValueError` where `diffusers` failed to load weights from local cache because `save_pretrained` doesn't append the `.fp16` suffix.
+  - **Bug Fix: Black Image Generation**: Fixed issue where SDXL produced black images (NaNs) in fp16 by explicitly passing the fixed fp16 VAE to the pipeline.
+  - **Bug Fix: Modal URL Alignment**: Simplified labels in `app.py` to `"train"` and `"generate"` to match the backend's expected URL structure. Updated `.env` and `ModalModel.ts`.
+  - **Bug Fix: `torch.compile` LoRA Incompatibility**: Disabled `torch.compile` on the UNet to fix adapter registration errors and eliminate compilation delays for new LoRAs.
+  - **UX: Camera Polling**: Added 5-second auto-refresh to `CameraTab.tsx` and "Go to Camera" button to `GenerateTab.tsx`.
+  - **UX: Failed State Handling**: Updated `CameraTab.tsx` to display "Generation Failed" for errored images, preventing infinite "Generating..." spins.
+  - **Health Check**: Verified and documented the `GET /health` endpoint for backend monitoring.

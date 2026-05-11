@@ -207,9 +207,6 @@ export const ImageBulk = async (req: Request, res: Response) => {
 
     const where: any = {
         userId: req.userId!,
-        status: {
-            not: "Failed"
-        }
     };
 
     if (ids) {
