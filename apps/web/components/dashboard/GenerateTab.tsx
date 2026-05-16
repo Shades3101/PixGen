@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 interface TModel {
     id: string;
     name: string;
+    type?: string;
     thumbnail: string;
     trainingStatus: string;
     triggerWord?: string;
@@ -57,8 +58,6 @@ const GenerateTab = () => {
         })();
     }, []);
 
-    // Automatic trigger word injection is handled in handleGenerate
-
     const handleGenerate = async () => {
 
         if (!prompt || !selectedModel) {
@@ -72,10 +71,13 @@ const GenerateTab = () => {
             const token = await getToken();
             const model = models.find(m => m.id === selectedModel);
             const triggerWord = model?.triggerWord;
-
-            // Automatically inject trigger word if not already present in prompt
-            const finalPrompt = (triggerWord && !prompt.includes(triggerWord)) 
-                ? `${prompt} ${triggerWord}` 
+            
+            // Prompt is structured to match DreamBooth training format:
+            // "a photo of {trigger_word} {type}, {user prompt}, highly detailed, sharp focus"
+            // This ensures the LoRA activates correctly and style adherence is maximised.
+            const subjectType = model?.type?.toLowerCase() ?? "person";
+            const finalPrompt = (triggerWord && !prompt.includes(triggerWord))
+                ? `a photo of ${triggerWord} ${subjectType}, ${prompt}, highly detailed, sharp focus`
                 : prompt;
 
             await axios.post(`${BACKEND_URL}/ai/generate`,{ 
